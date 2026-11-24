@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="cards">
+  <div class="card"><h3>交易日</h3><p>{{ overview.n_days }} 天</p>
+    <small>{{ overview.cal_min or '—' }} ~ {{ overview.cal_max or '—' }}</small></div>
+  <div class="card"><h3>合约数</h3><p>{{ overview.n_contracts }} 个</p></div>
+  <div class="card"><h3>换月次数</h3><p>{{ overview.n_rolls }} 次</p>
+    <small>其中 {{ overview.n_missing_delta }} 次价差待报价</small></div>
+  <div class="card"><h3>已登记报价</h3><p>{{ overview.n_prices }} 笔</p></div>
+</section>
+
+<h2>合约序列</h2>
+<table>
+  <thead><tr><th>序号 ord</th><th>合约代码</th><th>报价笔数</th></tr></thead>
+  <tbody>
+  {% for c in contracts %}
+    <tr><td>{{ c.ord }}{% if c.ord == 0 %}（初始合约）{% endif %}</td>
+        <td>{{ c.code }}</td><td>{{ c.price_count }}</td></tr>
+  {% else %}
+    <tr><td colspan="3" class="empty">尚未登记合约，请先到「换月计划」录入</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>固定换月计划</h2>
+<table>
+  <thead><tr><th>第几次</th><th>切换日</th><th>价差参考日(前一交易日)</th>
+    <th>旧合约 → 新合约</th><th>价差(分)</th></tr></thead>
+  <tbody>
+  {% for r in rolls %}
+    <tr class="{{ 'warn' if r.delta is none }}">
+      <td>{{ r.ord }}</td><td>{{ r.switch_date }}</td><td>{{ r.pre_date }}</td>
+      <td>{{ r.old_code }} → {{ r.new_code }}</td>
+      <td>{% if r.delta is none %}<em>待补报价</em>{% else %}{{ r.delta }}{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="empty">尚无换月记录</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}换月计划{% endblock %}
+{% block content %}
+<h2>初始合约与固定换月计划</h2>
+<p class="hint">登记初始合约，并按时间顺序录入每个切换日启用的合约。切换日须为交易日，
+价差统一取切换日<strong>前一交易日</strong>的「新合约价 − 旧合约价」。
+已有报价或换月数据后，本页为防止历史错配不再允许整体重建。</p>
+<form method="post" id="plan-form">
+  <label>初始合约代码 <input name="initial_code" required
+    value="{{ contracts[0].code if contracts else '' }}" placeholder="如 IF2601"></label>
+  <table id="switch-table">
+    <thead><tr><th>切换日</th><th>当日启用的新合约</th><th>操作</th></tr></thead>
+    <tbody>
+    {% set existing = rolls|length %}
+    {% if existing %}
+      {% for r in rolls %}
+      <tr>
+        <td><input type="date" name="switch_date" value="{{ r.switch_date }}" required></td>
+        <td><input name="switch_code" value="{{ r.new_code }}" required placeholder="如 IF2602"></td>
+        <td><button type="button" onclick="this.closest('tr').remove()">删除</button></td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr>
+        <td><input type="date" name="switch_date" required></td>
+        <td><input name="switch_code" required placeholder="如 IF2602"></td>
+        <td><button type="button" onclick="this.closest('tr').remove()">删除</button></td>
+      </tr>
+    {% endif %}
+    </tbody>
+  </table>
+  <button type="button" onclick="addRow()">+ 增加一次换月</button>
+  <div class="actions"><button type="submit" class="primary">保存计划</button></div>
+</form>
+<script>
+function addRow(){
+  const tbody = document.querySelector('#switch-table tbody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = '<td><input type="date" name="switch_date" required></td>'
+    + '<td><input name="switch_code" required placeholder="如 IF2602"></td>'
+    + '<td><button type="button" onclick="this.closest(\'tr\').remove()">删除</button></td>';
+  tbody.appendChild(tr);
+}
+</script>
+{% endblock %}

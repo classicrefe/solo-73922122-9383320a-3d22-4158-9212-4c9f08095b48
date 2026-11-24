@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}连续合约结算价{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header>
+  <h1>期货连续合约结算价系统</h1>
+  <nav>
+    <a href="{{ url_for('index') }}">总览</a>
+    <a href="{{ url_for('calendar_view') }}">交易日历</a>
+    <a href="{{ url_for('plan_view') }}">换月计划</a>
+    <a href="{{ url_for('prices_view') }}">报价补录/更正</a>
+    <a href="{{ url_for('query_view') }}">连续价取数</a>
+  </nav>
+</header>
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-wrap">
+      {% for cat, msg in messages %}
+        <div class="flash {{ cat }}">{{ msg }}</div>
+      {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+<footer>连续价实时计算，不落库；基准日不早于查询结束日 · 价格单位：分（整数）</footer>
+</body>
+</html>

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}连续价取数{% endblock %}
+{% block content %}
+<h2>连续价取数</h2>
+<p class="hint">选择日期范围与基准日（<strong>基准日不得早于结束日</strong>）。
+连续价 = 当日在用合约结算价 + 该日后至基准日（含）各次换月价差之和；
+原价或换月报价缺失时连续价留空，并注明缺价来源。整次取数在同一已提交快照上完成。</p>
+<form method="get" class="grid-form">
+  <label>开始日 <input type="date" name="start" value="{{ start }}" required></label>
+  <label>结束日 <input type="date" name="end" value="{{ end }}" required></label>
+  <label>基准日 <input type="date" name="base" value="{{ base or end }}" required></label>
+  <button type="submit" class="primary">查询</button>
+</form>
+
+{% if err %}<div class="flash err">{{ err }}</div>{% endif %}
+
+{% if rows %}
+<div class="actions">
+  <a class="button" href="{{ url_for('download', start=start, end=end, base=base) }}">下载 CSV</a>
+  <span class="hint">共 {{ rows|length }} 个交易日，
+    正常 {{ rows|selectattr('status','equalto','ok')|list|length }} 天，
+    留空 {{ rows|rejectattr('status','equalto','ok')|list|length }} 天</span>
+</div>
+<table>
+  <thead><tr><th>交易日</th><th>在用合约</th><th>原价(分)</th>
+    <th>换月调整(分)</th><th>连续价(分)</th><th>状态 / 缺价说明</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr class="{{ '' if r.status == 'ok' else 'warn' }}">
+      <td>{{ r.date }}</td>
+      <td>{{ r.contract }}</td>
+      <td>{{ r.raw_price if r.raw_price is not none else '—' }}</td>
+      <td>{{ r.adjustment if r.status == 'ok' else '—' }}</td>
+      <td><strong>{{ r.continuous if r.continuous is not none else '' }}</strong></td>
+      <td>{% if r.status == 'ok' %}正常{% else %}{{ r.message }}{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

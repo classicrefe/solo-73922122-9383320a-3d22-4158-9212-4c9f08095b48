@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}交易日历{% endblock %}
+{% block content %}
+<h2>交易日历</h2>
+<p class="hint">每行一个交易日（YYYY-MM-DD），保存时全量替换、自动去重排序。换月切换日必须在日历内。</p>
+<form method="post">
+  <textarea name="dates" rows="16" placeholder="2026-01-05&#10;2026-01-06&#10;...">{{ dates }}</textarea>
+  <div><button type="submit">保存交易日历</button></div>
+</form>
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}报价补录/更正{% endblock %}
+{% block content %}
+<h2>结算价补录 / 更正</h2>
+<p class="hint">按合约与交易日登记<strong>整数分</strong>结算价。同一合约同一交易日重复提交即更正；
+若该日是某次换月的价差参考日，系统会在同一事务内联动重算该次换月价差，<strong>不逐日回写连续价</strong>。</p>
+<form method="post" class="grid-form">
+  <label>合约
+    <select name="contract_id" required>
+      {% for c in contracts %}
+      <option value="{{ c.contract_id }}">{{ c.code }}（ord={{ c.ord }}）</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>交易日 <input type="date" name="date" required></label>
+  <label>结算价（分，整数） <input type="number" step="1" name="price" required placeholder="如 38250"></label>
+  <button type="submit" class="primary">补录 / 更正</button>
+</form>
+{% if not contracts %}<p class="empty">请先在「换月计划」登记合约。</p>{% endif %}
+
+<h2>已登记报价 <small>（最多显示 500 笔，最新在前）</small></h2>
+<form method="get" class="inline">
+  <label>按合约筛选
+    <select name="contract_id" onchange="this.form.submit()">
+      <option value="">全部</option>
+      {% for c in contracts %}
+      <option value="{{ c.contract_id }}" {{ 'selected' if selected == c.contract_id }}>{{ c.code }}</option>
+      {% endfor %}
+    </select>
+  </label>
+</form>
+<table>
+  <thead><tr><th>交易日</th><th>合约</th><th>结算价(分)</th></tr></thead>
+  <tbody>
+  {% for p in prices %}
+    <tr><td>{{ p.date }}</td><td>{{ p.code }}</td><td>{{ p.price }}</td></tr>
+  {% else %}
+    <tr><td colspan="3" class="empty">暂无报价</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
