@@ -94,6 +94,50 @@ def connect(db_path: Optional[str] = None) -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection) -> None:
     with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
         conn.executescript(f.read())
+    _migrate_rolls_pre_date_unique(conn)
+
+
+def _migrate_rolls_pre_date_unique(conn: sqlite3.Connection) -> None:
+    """
+    旧版 rolls.pre_date 无唯一约束（仅有普通索引 idx_rolls_predate）。
+    新口径依赖 pre_date 唯一（一笔报价至多联动一个换月），启动时幂等迁移：
+      - pre_date 上已存在唯一索引/约束则跳过；
+      - 否则重建表并把数据原样搬回（同 ord/switch_date 的 pre_date 本就互异）。
+    """
+    already_unique = False
+    for idx in conn.execute("PRAGMA index_list('rolls')"):
+        if not idx["unique"]:
+            continue
+        cols = [r["name"] for r in
+                conn.execute(f"PRAGMA index_info('{idx['name']}')")]
+        if cols == ["pre_date"]:
+            already_unique = True
+            break
+    if already_unique:
+        return
+    with write_tx(conn):
+        conn.execute("DROP INDEX IF EXISTS idx_rolls_predate")
+        conn.execute("ALTER TABLE rolls RENAME TO rolls_legacy")
+        conn.execute(
+            "CREATE TABLE rolls ("
+            "ord INTEGER PRIMARY KEY, "
+            "switch_date TEXT NOT NULL UNIQUE, "
+            "pre_date TEXT NOT NULL UNIQUE, "
+            "new_contract_id INTEGER NOT NULL REFERENCES contracts(contract_id), "
+            "delta INTEGER)"
+        )
+        conn.execute(
+            "INSERT INTO rolls(ord, switch_date, pre_date, new_contract_id, delta) "
+            "SELECT ord, switch_date, pre_date, new_contract_id, delta FROM rolls_legacy"
+        )
+        conn.execute("DROP TABLE rolls_legacy")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rolls_switch ON rolls(switch_date)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rolls_delta_null ON rolls(ord) "
+            "WHERE delta IS NULL"
+        )
 
 
 @contextmanager
@@ -129,16 +173,80 @@ def list_calendar(conn: sqlite3.Connection) -> list[str]:
     return [r["date"] for r in conn.execute("SELECT date FROM calendar ORDER BY date")]
 
 
-def replace_calendar(conn: sqlite3.Connection, dates: list[str]) -> int:
-    """全量替换交易日历（去重、校验格式、排序）。"""
+def replace_calendar(conn: sqlite3.Connection, dates: list[str]) -> dict:
+    """
+    全量替换交易日历（去重、校验格式、排序），并联动修正换月计划。
+
+    规则：
+      - 新日历必须包含每个换月切换日，且每个切换日在新日历中都有前一交易日；
+      - 已有报价的交易日不允许删除（只按“被删日期”做点查，不扫描整张报价表）；
+      - 换月价差参考日（pre_date）以新日历中切换日前最近的交易日重新锚定，
+        因此重存同一份合法日历也能修复历史遗留的错误参考日；
+      - 只重算参考日发生变化的换月，参考日未变的换月价差与 Fenwick 节点不动；
+      - 日历、换月参考日、价差、Fenwick 索引在同一个 IMMEDIATE 事务内原子提交，
+        任一步失败整体回滚，对外仍按原数据供数。
+    """
     cleaned = sorted({d.strip() for d in dates if d and d.strip()})
     bad = [d for d in cleaned if not valid_iso(d)]
     if bad:
         raise AppError(f"交易日日期格式非法：{bad[0]}，应为 YYYY-MM-DD")
+    new_days = set(cleaned)
+
+    result = {"n_days": len(cleaned), "reanchored": [], "recomputed": 0}
     with write_tx(conn):
+        # BEGIN IMMEDIATE 已取得写锁，事务内读到的就是此刻最新已提交状态；
+        # 与报价更新交错提交时，后提交方天然基于先提交方的结果校验。
+        rolls_before = list(conn.execute(
+            "SELECT ord, switch_date, pre_date FROM rolls ORDER BY ord"
+        ))
+        old_days = {r["date"] for r in conn.execute("SELECT date FROM calendar")}
+        removed = old_days - new_days
+
+        for roll in rolls_before:
+            sd = roll["switch_date"]
+            if sd not in new_days:
+                raise AppError(
+                    f"新日历缺少换月切换日 {sd}，换月计划中的切换日必须保留在交易日历内"
+                )
+        # 被删日期上是否已登记报价：仅对被删日期走索引点查（EXISTS），不全量扫描 prices
+        for day in sorted(removed):
+            hit = conn.execute(
+                "SELECT 1 FROM prices WHERE date = ? LIMIT 1", (day,)
+            ).fetchone()
+            if hit is not None:
+                raise AppError(
+                    f"交易日 {day} 已有报价登记，不能从日历删除；"
+                    f"如需删除请先移除该日全部报价"
+                )
+
         conn.execute("DELETE FROM calendar")
         conn.executemany("INSERT INTO calendar(date) VALUES (?)", [(d,) for d in cleaned])
-    return len(cleaned)
+
+        # 基于新日历重新锚定每次换月的参考日；只处理参考日实际变化的换月
+        for roll in rolls_before:
+            ord_ = roll["ord"]
+            new_pre = prev_trade_date(conn, roll["switch_date"])
+            if new_pre is None:
+                raise AppError(
+                    f"切换日 {roll['switch_date']} 在新日历中没有前一交易日，"
+                    f"无法取换月价差，请先补入该切换日之前的交易日"
+                )
+            if new_pre == roll["pre_date"]:
+                continue
+            # 先只改参考日：_recompute_roll_delta 会读到旧 delta，
+            # 正确把旧值从 Fenwick 撤下，再按新参考日报价重算并写入新值
+            conn.execute(
+                "UPDATE rolls SET pre_date = ? WHERE ord = ?",
+                (new_pre, ord_),
+            )
+            new_delta = _recompute_roll_delta(conn, ord_)
+            result["reanchored"].append({
+                "ord": ord_, "switch_date": roll["switch_date"],
+                "old_pre_date": roll["pre_date"], "new_pre_date": new_pre,
+                "new_delta": new_delta,
+            })
+            result["recomputed"] += 1
+    return result
 
 
 def prev_trade_date(conn: sqlite3.Connection, day: str) -> Optional[str]:
@@ -340,35 +448,45 @@ def upsert_price(conn: sqlite3.Connection, contract_id: int, day: str,
     """
     新增/更正一笔整数分结算价。
     原子事务内完成：
-      1) prices 写入（原价与价差一起生效）；
-      2) 仅重算“价差参考日 = 该日”的换月（至多 1 个，因为 pre_date 唯一）；
-      3) 不触碰任何连续价、不逐日回写。
+      1) 事务内按最新已提交状态校验（交易日、合约均在 BEGIN IMMEDIATE 后读取，
+         与改历操作交错提交时，后提交方按最新日历/计划校验）；
+      2) prices 写入（原价与价差一起生效）；
+      3) 仅重算“价差参考日 = 该日”的换月（至多 1 个，因为 pre_date 唯一）；
+      4) 不触碰任何连续价、不逐日回写。
     返回预览信息（即使提交失败，调用方也可展示计算结果）。
     """
     if not valid_iso(day):
         raise AppError(f"日期格式非法：{day}，应为 YYYY-MM-DD")
     if not isinstance(price, int) or isinstance(price, bool):
         raise AppError("结算价必须是整数（单位：分）")
-    if not is_trade_date(conn, day):
-        raise AppError(f"{day} 不在交易日历中，不能登记报价")
 
-    contract = get_contract(conn, contract_id)
-    if contract is None:
-        raise AppError(f"合约不存在：id={contract_id}")
-
-    affected_roll = conn.execute(
-        "SELECT ord FROM rolls WHERE pre_date = ?", (day,)
-    ).fetchone()
-    before = get_price(conn, contract_id, day)
     preview = {
-        "contract": contract["code"], "date": day, "price": price,
-        "old_price": before, "is_correction": before is not None,
-        "affected_roll_ord": affected_roll["ord"] if affected_roll else None,
-        "committed": False,
+        "contract": None, "date": day, "price": price,
+        "old_price": None, "is_correction": False,
+        "affected_roll_ord": None, "committed": False,
     }
 
     try:
         with write_tx(conn):
+            # 以下校验全部在写事务内：改历若先提交，这里立即看到新日历；
+            # 若改历后提交，则其事务会等待本事务结束后再按最新报价校验。
+            if not is_trade_date(conn, day):
+                raise AppError(f"{day} 不在交易日历中，不能登记报价")
+            contract = get_contract(conn, contract_id)
+            if contract is None:
+                raise AppError(f"合约不存在：id={contract_id}")
+
+            affected_roll = conn.execute(
+                "SELECT ord FROM rolls WHERE pre_date = ?", (day,)
+            ).fetchone()
+            before = get_price(conn, contract_id, day)
+            preview.update({
+                "contract": contract["code"],
+                "old_price": before,
+                "is_correction": before is not None,
+                "affected_roll_ord": affected_roll["ord"] if affected_roll else None,
+            })
+
             conn.execute(
                 "INSERT INTO prices(contract_id, date, price) VALUES (?, ?, ?) "
                 "ON CONFLICT(contract_id, date) DO UPDATE SET price = excluded.price",
@@ -379,6 +497,10 @@ def upsert_price(conn: sqlite3.Connection, contract_id: int, day: str,
                 preview["new_delta"] = new_delta
         # 事务已由上下文管理器提交：原价与受影响价差同时生效
         preview["committed"] = True
+    except AppError:
+        # 业务校验失败：写事务已整体回滚，错误交给调用方展示
+        preview["committed"] = False
+        raise
     except sqlite3.Error as e:
         # 保存失败已整体回滚；预期结果仍随 preview 返回供页面展示
         preview["committed"] = False

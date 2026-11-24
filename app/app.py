@@ -57,8 +57,23 @@ def create_app() -> Flask:
             raw = request.form.get("dates", "")
             dates = [line.strip() for line in raw.replace(",", "\n").splitlines()]
             try:
-                n = db.replace_calendar(conn, dates)
-                flash(f"交易日历已保存，共 {n} 个交易日", "ok")
+                result = db.replace_calendar(conn, dates)
+                if result["reanchored"]:
+                    parts = []
+                    for a in result["reanchored"]:
+                        delta_txt = "仍缺报价" if a["new_delta"] is None \
+                            else f"新价差 {a['new_delta']} 分"
+                        parts.append(
+                            f"第 {a['ord']} 次换月参考日 {a['old_pre_date']} → "
+                            f"{a['new_pre_date']}（{delta_txt}）"
+                        )
+                    msg = (f"交易日历已保存，共 {result['n_days']} 个交易日；"
+                           f"已按新日历重锚 {len(result['reanchored'])} 个换月参考日："
+                           + "；".join(parts))
+                else:
+                    msg = (f"交易日历已保存，共 {result['n_days']} 个交易日；"
+                           f"换月参考日均无变化（重存同一份日历也会校正遗留的错误参考日）")
+                flash(msg, "ok")
             except db.AppError as e:
                 flash(str(e), "err")
             return redirect(url_for("calendar_view"))

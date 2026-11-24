@@ -23,7 +23,7 @@ INSERT OR IGNORE INTO meta (id) VALUES (1);
 CREATE TABLE IF NOT EXISTS rolls (
     ord              INTEGER PRIMARY KEY,          -- 第几次换月，1..n 稠密
     switch_date      TEXT NOT NULL UNIQUE,         -- 切换日（当日起启用新合约）
-    pre_date         TEXT NOT NULL,                 -- 切换前一交易日
+    pre_date         TEXT NOT NULL UNIQUE,         -- 切换前一交易日（同一交易日至多作为一个换月的参考日）
     new_contract_id  INTEGER NOT NULL REFERENCES contracts(contract_id),
     delta            INTEGER                        -- 新合约价 - 旧合约价，缺报价时为 NULL
 );
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS prices (
 ) WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS idx_rolls_switch  ON rolls(switch_date);
-CREATE INDEX IF NOT EXISTS idx_rolls_predate ON rolls(pre_date);
+-- pre_date 的唯一性由表级 UNIQUE 约束保证（同一交易日至多是一个换月的参考日）
 -- 部分索引：快速定位区间内最早缺价差的换月
 CREATE INDEX IF NOT EXISTS idx_rolls_delta_null ON rolls(ord) WHERE delta IS NULL;
 CREATE INDEX IF NOT EXISTS idx_prices_date ON prices(date);
